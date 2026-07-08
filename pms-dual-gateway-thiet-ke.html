@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thiết kế tích hợp PMS — Kiến trúc dual-gateway</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=Source+Sans+3:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --font-serif:'Source Serif 4',Georgia,serif;
+  --font-body:'Source Sans 3',system-ui,sans-serif;
+  --font-mono:'IBM Plex Mono','SF Mono',monospace;
+  --bg:#f0f1ec; --surface:#ffffff; --surface2:#e9ebe4; --surface-el:#fbfbf7;
+  --border:rgba(30,45,70,.12); --border-br:rgba(30,45,70,.22);
+  --text:#1f2530; --text-dim:#5d6672; --text-br:#12171f;
+  --accent:#1e3a5f; --accent-dim:rgba(30,58,95,.08);
+  --ident:#1e5f8f; --ident-dim:rgba(30,95,143,.10);   /* emsgw / identity (blue) */
+  --biz:#2f7d32;   --biz-dim:rgba(47,125,50,.10);       /* pmsgw / business (green) */
+  --authz:#9a6a12; --authz-dim:rgba(154,106,18,.12);    /* genco_admin / keycloak (gold) */
+  --db:#0f6e66;    --db-dim:rgba(15,110,102,.10);        /* database (teal) */
+  --user:#8e2f52;  --user-dim:rgba(142,47,82,.10);       /* browser (cranberry) */
+  --red:#b3261e; --red-dim:rgba(179,38,30,.10);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#101620; --surface:#171e2a; --surface2:#1e2735; --surface-el:#202a3a;
+  --border:rgba(150,180,220,.13); --border-br:rgba(150,180,220,.26);
+  --text:#dbe3ee; --text-dim:#8395ab; --text-br:#f0f5fb;
+  --accent:#6ea3d8; --accent-dim:rgba(110,163,216,.14);
+  --ident:#68b0e0; --ident-dim:rgba(104,176,224,.14);
+  --biz:#7bd47f;   --biz-dim:rgba(123,212,127,.13);
+  --authz:#e2b354; --authz-dim:rgba(226,179,84,.14);
+  --db:#4fcabe;    --db-dim:rgba(79,202,190,.13);
+  --user:#e58aa9;  --user-dim:rgba(229,138,169,.13);
+  --red:#f08a7e; --red-dim:rgba(240,138,126,.13);
+}}
+[data-theme="dark"]{
+  --bg:#101620; --surface:#171e2a; --surface2:#1e2735; --surface-el:#202a3a;
+  --border:rgba(150,180,220,.13); --border-br:rgba(150,180,220,.26);
+  --text:#dbe3ee; --text-dim:#8395ab; --text-br:#f0f5fb;
+  --accent:#6ea3d8; --accent-dim:rgba(110,163,216,.14);
+  --ident:#68b0e0; --ident-dim:rgba(104,176,224,.14);
+  --biz:#7bd47f;   --biz-dim:rgba(123,212,127,.13);
+  --authz:#e2b354; --authz-dim:rgba(226,179,84,.14);
+  --db:#4fcabe;    --db-dim:rgba(79,202,190,.13);
+  --user:#e58aa9;  --user-dim:rgba(229,138,169,.13);
+  --red:#f08a7e; --red-dim:rgba(240,138,126,.13);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font-body);line-height:1.62;overflow-wrap:break-word;
+  background-image:radial-gradient(ellipse at 50% -8%,var(--accent-dim) 0%,transparent 55%)}
+.wrap{max-width:1120px;margin:0 auto;padding:56px 22px 100px}
+.grid>*,.flex>*{min-width:0}
+h1{font-family:var(--font-serif);font-size:clamp(28px,3.6vw,42px);line-height:1.12;letter-spacing:-.4px;margin:.1em 0;color:var(--text-br);font-weight:700}
+h2{font-family:var(--font-serif);font-size:clamp(21px,2.2vw,27px);letter-spacing:-.2px;margin:0 0 6px;color:var(--text-br);font-weight:600}
+h3{font-size:16px;margin:0 0 6px;color:var(--text-br);font-weight:700}
+p{margin:.55em 0}
+.prose{font-size:16.5px;line-height:1.72;max-width:74ch}
+code{font-family:var(--font-mono);font-size:.83em;background:var(--accent-dim);color:var(--accent);padding:1px 6px;border-radius:4px;word-break:break-word}
+.mono{font-family:var(--font-mono)} .dim{color:var(--text-dim)}
+.kicker{font-family:var(--font-mono);font-size:12px;font-weight:600;letter-spacing:2.5px;text-transform:uppercase;color:var(--accent);display:flex;align-items:center;gap:9px;margin-bottom:14px}
+.kicker::before{content:'';width:26px;height:2px;background:currentColor}
+section{margin-top:56px;scroll-margin-top:20px}
+.lead{font-size:19px;line-height:1.6;color:var(--text-dim);max-width:76ch;font-family:var(--font-serif)}
+
+.theme-toggle{position:fixed;top:16px;right:16px;z-index:300;width:36px;height:36px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text-dim);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;transition:.15s;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+.theme-toggle:hover{background:var(--surface2);color:var(--text)}
+
+.abstract{border-left:3px solid var(--accent);background:var(--surface);border-radius:0 12px 12px 0;padding:18px 24px;margin-top:22px;box-shadow:0 4px 20px rgba(20,30,50,.06)}
+.abstract .t{font-family:var(--font-mono);font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--accent);font-weight:600;margin-bottom:7px}
+.abstract p{margin:0;font-size:16px}
+
+/* legend */
+.legend{display:flex;flex-wrap:wrap;gap:8px 20px;margin:14px 0 4px;font-size:13.5px}
+.legend span{display:flex;align-items:center;gap:9px;color:var(--text-dim)}
+.legend i{width:34px;height:0;display:inline-block;flex-shrink:0}
+.l-ident{border-top:3px solid var(--ident)}
+.l-biz{border-top:3px solid var(--biz)}
+.l-authz{border-top:3px dashed var(--authz)}
+.l-db{border-top:3px solid var(--db)}
+
+/* diagram framing */
+.diagram{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:26px 20px;margin-top:16px;box-shadow:0 4px 24px rgba(20,30,50,.05)}
+.tier{margin:0 auto;max-width:900px}
+.tier__label{font-family:var(--font-mono);font-size:10.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-dim);text-align:center;margin:0 0 10px}
+.row{display:flex;flex-wrap:wrap;justify-content:center;gap:12px}
+.appcard{border:1.4px solid var(--ac,var(--border-br));background:color-mix(in srgb,var(--surface) 88%,var(--ac,var(--accent)) 12%);border-radius:11px;padding:11px 14px;min-width:150px;flex:1 1 150px;max-width:210px}
+.appcard b{color:var(--text-br);font-size:14.5px;display:block}
+.appcard .s{font-family:var(--font-mono);font-size:11px;color:var(--ac,var(--accent));margin-top:2px}
+.appcard.hl{box-shadow:0 0 0 2px color-mix(in srgb,var(--ac) 45%,transparent)}
+.c-user{--ac:var(--user)} .c-ident{--ac:var(--ident)} .c-biz{--ac:var(--biz)} .c-authz{--ac:var(--authz)} .c-db{--ac:var(--db)}
+
+.band{display:flex;flex-direction:column;align-items:center;gap:3px;padding:9px 0;color:var(--bc,var(--text-dim));font-family:var(--font-mono);font-size:11.5px;font-weight:600;text-align:center}
+.band .cap{color:var(--text-dim);font-weight:500;font-size:11px;max-width:60ch}
+.band svg{width:20px;height:20px;fill:none;stroke:var(--bc,var(--border-br));stroke-width:2.3;stroke-linecap:round;stroke-linejoin:round}
+.band--ident{--bc:var(--ident)} .band--biz{--bc:var(--biz)} .band--authz{--bc:var(--authz)} .band--db{--bc:var(--db)}
+.band--authz svg{stroke-dasharray:3 3}
+
+.gwbox{border:1.6px solid var(--gc);background:color-mix(in srgb,var(--surface) 84%,var(--gc) 16%);border-radius:12px;padding:13px 16px;min-width:230px;flex:1 1 240px;max-width:340px}
+.gwbox b{color:var(--text-br);font-size:15px}
+.gwbox .addr{font-family:var(--font-mono);font-size:11.5px;color:var(--gc);background:color-mix(in srgb,var(--gc) 14%,transparent);padding:2px 7px;border-radius:5px;display:inline-block;margin-top:5px;font-weight:600}
+.gwbox .role{font-size:12.5px;color:var(--text-dim);margin-top:6px}
+.g-ident{--gc:var(--ident)} .g-biz{--gc:var(--biz)}
+
+/* PMS detail: precise labeled flow */
+.flow{display:flex;flex-direction:column;align-items:center;gap:0}
+.fnode{width:100%;max-width:680px;border:1.5px solid var(--nc,var(--border-br));background:color-mix(in srgb,var(--surface) 87%,var(--nc,var(--accent)) 13%);border-radius:12px;padding:13px 17px}
+.fnode__t{font-weight:700;color:var(--text-br);font-size:15px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.fnode__loc{font-family:var(--font-mono);font-size:10.5px;color:var(--nc,var(--accent));background:color-mix(in srgb,var(--nc,var(--accent)) 15%,transparent);padding:2px 7px;border-radius:5px;font-weight:600}
+.fnode__b{font-size:13.5px;color:var(--text-dim);margin-top:6px}
+.n-user{--nc:var(--user)} .n-ident{--nc:var(--ident)} .n-biz{--nc:var(--biz)} .n-authz{--nc:var(--authz)} .n-db{--nc:var(--db)}
+.conn{display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 0;max-width:680px;width:100%}
+.conn__addr{font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--cc,var(--text-dim));background:color-mix(in srgb,var(--cc,var(--accent)) 9%,transparent);border:1px solid color-mix(in srgb,var(--cc,var(--accent)) 25%,transparent);padding:3px 9px;border-radius:6px;text-align:center;word-break:break-all}
+.conn__cap{font-size:11.5px;color:var(--text-dim);text-align:center}
+.conn svg{width:20px;height:18px;fill:none;stroke:var(--cc,var(--border-br));stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+.conn--ident{--cc:var(--ident)} .conn--biz{--cc:var(--biz)} .conn--authz{--cc:var(--authz)} .conn--db{--cc:var(--db)}
+.conn--authz svg{stroke-dasharray:3 3}
+
+/* gateway row with dashed side-call */
+.gwrow{width:100%;max-width:680px;display:grid;grid-template-columns:1fr auto;gap:0;align-items:stretch}
+.sidecall{display:flex;align-items:center;gap:6px;padding-left:12px}
+.sidecall__l{width:30px;border-top:3px dashed var(--authz);position:relative;flex-shrink:0}
+.sidecall__l::after{content:'▸';position:absolute;right:-4px;top:-11px;color:var(--authz);font-size:13px}
+.ctrlbox{border:1.5px dashed var(--authz);border-radius:11px;background:var(--authz-dim);padding:10px 12px;min-width:200px}
+.ctrlbox__t{font-family:var(--font-mono);font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--authz);font-weight:600;margin-bottom:5px}
+.ctrlbox ul{margin:0;padding-left:15px;font-size:12px;line-height:1.5;color:var(--text)}
+.ctrlbox .cache{display:inline-block;margin-top:6px;font-family:var(--font-mono);font-size:10px;background:color-mix(in srgb,var(--authz) 16%,transparent);color:var(--authz);padding:2px 6px;border-radius:4px;font-weight:600}
+
+/* connection table */
+.table-wrap{border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--surface);margin-top:16px}
+.table-scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13.5px;min-width:640px}
+th{background:var(--surface-el);font-family:var(--font-mono);font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--text-dim);text-align:left;padding:11px 13px;border-bottom:2px solid var(--border-br);white-space:nowrap}
+td{padding:11px 13px;border-bottom:1px solid var(--border);vertical-align:top}
+tbody tr:last-child td{border-bottom:none}
+td code{font-size:11.5px}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.d-ident{background:var(--ident)} .d-biz{background:var(--biz)} .d-authz{background:var(--authz)} .d-db{background:var(--db)}
+
+.callout{padding:15px 19px;border-radius:11px;border-left:4px solid var(--cc,var(--accent));background:color-mix(in srgb,var(--cc,var(--accent)) 8%,transparent);margin-top:16px}
+.callout--ok{--cc:var(--biz)} .callout--info{--cc:var(--accent)} .callout--warn{--cc:var(--authz)}
+.callout h3{margin-bottom:5px;color:var(--cc)}
+.callout ol{margin:6px 0 0;padding-left:1.35em} .callout li{margin:6px 0;font-size:14.5px}
+
+.toc{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}
+.toc a{font-family:var(--font-mono);font-size:12px;text-decoration:none;color:var(--text-dim);border:1px solid var(--border);border-radius:20px;padding:5px 13px;transition:.15s}
+.toc a:hover{color:var(--accent);border-color:var(--accent)}
+
+@media (max-width:820px){
+  .gwrow{grid-template-columns:1fr}
+  .sidecall{padding-left:0;padding-top:10px;flex-direction:column;align-items:stretch}
+  .sidecall__l{width:0;height:20px;border-top:0;border-left:3px dashed var(--authz);margin-left:18px}
+  .sidecall__l::after{right:auto;left:-9px;top:auto;bottom:-6px;content:'▾'}
+  .ctrlbox{min-width:0}
+  .appcard{max-width:none}
+}
+@media (max-width:600px){.wrap{padding:38px 15px 72px}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="themeToggle" title="Đổi giao diện sáng/tối" aria-label="Toggle light/dark theme"></button>
+<div class="wrap">
+
+  <div class="kicker">Tài liệu thiết kế · Kiến trúc · UAT</div>
+  <h1>Tích hợp PMS vào hệ sinh thái EVNGENCO1: kiến trúc dual-gateway</h1>
+  <p class="lead">Phân quyền tập trung, dữ liệu nghiệp vụ phân tán. PMS tiêu thụ định danh &amp; phân quyền từ cổng trung tâm <code>emsgw-uat</code>, đồng thời phục vụ toàn bộ API nghiệp vụ qua cổng riêng <code>pmsgw</code> — cổng này vẫn kiểm tra an ninh dựa trên cơ sở dữ liệu phân quyền tập trung <code>genco_admin</code>.</p>
+
+  <div class="abstract">
+    <div class="t">Tóm lược (Abstract)</div>
+    <p>Thiết kế phân tách hai <b>mặt phẳng</b>: (i) <b>mặt phẳng điều khiển</b> — định danh (Keycloak), người dùng/đơn vị/phòng ban/chức vụ, thực đơn (menu) và ma trận quyền (nút/API) — được cung cấp tập trung bởi CMS thông qua cổng <code>emsgw-uat.evngenco1.vn/admin</code>; và (ii) <b>mặt phẳng dữ liệu</b> — mọi lời gọi API nghiệp vụ của PMS (kể cả công cụ số hóa đường đặc tuyến) — đi qua cổng riêng <code>pmsgw.evngenco1.vn</code>, đặt cùng cụm máy chủ PMS. Cổng PMS ủy quyền quyết định an ninh về cùng một nguồn sự thật <code>genco_admin</code>, nhờ đó "được thấy" (menu) và "được gọi" (API) luôn nhất quán.</p>
+  </div>
+
+  <div class="toc">
+    <a href="#nt">1 · Nguyên tắc</a>
+    <a href="#tt">2 · Sơ đồ tổng thể</a>
+    <a href="#ct">3 · Sơ đồ chi tiết PMS</a>
+    <a href="#bang">4 · Bảng kết nối</a>
+    <a href="#dk">5 · Điều kiện đúng đắn</a>
+  </div>
+
+  <!-- 1. PRINCIPLES -->
+  <section id="nt">
+    <div class="kicker">1 · Nguyên tắc thiết kế</div>
+    <h2>Hai mặt phẳng, một nguồn sự thật</h2>
+    <p class="prose">Kiến trúc tuân thủ mô hình <b>“control-plane tập trung — data-plane phân tán”</b>. Thông tin phân quyền (ai, thuộc đơn vị/phòng ban nào, giữ chức vụ gì, được vào menu nào, bấm nút nào, gọi API nào) là <b>tài sản dùng chung</b> của toàn hệ EVNGENCO1, do CMS quản trị và lưu tại <code>genco_admin</code>. Ngược lại, <b>dữ liệu nghiệp vụ</b> của mỗi ứng dụng (với PMS là số liệu DCS, đặc tuyến, hiệu suất lò hơi/tuabin) có khối lượng lớn và đặc thù, nên được giữ <b>cục bộ</b> tại cụm máy chủ của ứng dụng. Cổng API của mỗi ứng dụng vẫn <b>kiểm tra an ninh dựa trên <code>genco_admin</code></b> (có bộ nhớ đệm Redis), do đó không phá vỡ tính tập trung của quản trị.</p>
+    <div class="legend">
+      <span><i class="l-ident"></i> Định danh / menu / quyền (qua emsgw → CMS)</span>
+      <span><i class="l-biz"></i> API nghiệp vụ (qua pmsgw)</span>
+      <span><i class="l-authz"></i> Kiểm tra an ninh (JWT + quyền) → genco_admin/Keycloak</span>
+      <span><i class="l-db"></i> Truy cập cơ sở dữ liệu</span>
+    </div>
+  </section>
+
+  <!-- 2. OVERALL -->
+  <section id="tt">
+    <div class="kicker">2 · Sơ đồ tổng thể toàn hệ</div>
+    <h2>Vị trí của PMS trong hệ sinh thái hiện tại</h2>
+    <p class="prose">Bốn ứng dụng hiện hữu (ECMS, EMS, DRS, EPS) đều dùng <b>một</b> cổng trung tâm <code>emsgw-uat</code> cho cả định danh lẫn nghiệp vụ. PMS kế thừa <b>y nguyên</b> phần định danh/menu/quyền qua <code>emsgw-uat/admin</code>, nhưng tách phần <b>nghiệp vụ</b> sang cổng riêng <code>pmsgw</code>.</p>
+
+    <div class="diagram">
+      <div class="tier">
+        <p class="tier__label">Tầng ứng dụng (Frontend)</p>
+        <div class="row">
+          <div class="appcard c-ident"><b>ECMS</b><span class="s">admin · CMS</span></div>
+          <div class="appcard c-ident"><b>EMS</b><span class="s">procurement</span></div>
+          <div class="appcard c-ident"><b>DRS</b><span class="s">report</span></div>
+          <div class="appcard c-ident"><b>EPS</b><span class="s">planning</span></div>
+          <div class="appcard c-biz hl"><b>PMS</b><span class="s">hiệu năng + tool</span></div>
+        </div>
+      </div>
+
+      <div class="band band--ident">
+        <svg viewBox="0 0 20 20"><path d="M10 3 L10 15 M6 11 L10 15 L14 11"/></svg>
+        <span>TẤT CẢ FE → <code>/admin</code> (định danh · info-token · sitemap · sitemapHidden)</span>
+        <span class="cap">Đăng nhập Keycloak · thông tin user/đơn vị/phòng ban/chức vụ · menu · quyền nút &amp; API</span>
+      </div>
+
+      <div class="tier" style="margin-top:6px">
+        <p class="tier__label">Tầng cổng (API Gateway)</p>
+        <div class="row">
+          <div class="gwbox g-ident"><b>api-gateway (EMS)</b><br><span class="addr">emsgw-uat.evngenco1.vn</span><div class="role">Định danh + nghiệp vụ cho ECMS/EMS/DRS/EPS; <b>và định danh cho PMS</b></div></div>
+          <div class="gwbox g-biz"><b>PMS gateway <span style="font-weight:400">(MỚI)</span></b><br><span class="addr">pmsgw.evngenco1.vn</span><div class="role">Chỉ nghiệp vụ PMS + tool đặc tuyến</div></div>
+        </div>
+      </div>
+
+      <div class="row" style="max-width:900px;margin:2px auto 0;gap:0;justify-content:space-around">
+        <div class="band band--authz" style="flex:1"><svg viewBox="0 0 20 20"><path d="M10 3 L10 15 M6 11 L10 15 L14 11"/></svg><span>kiểm tra JWT + quyền</span><span class="cap">cả 2 cổng → genco_admin + Keycloak</span></div>
+        <div class="band band--biz" style="flex:1"><svg viewBox="0 0 20 20"><path d="M10 3 L10 15 M6 11 L10 15 L14 11"/></svg><span>chuyển tiếp nghiệp vụ</span><span class="cap">tới backend từng app</span></div>
+      </div>
+
+      <div class="tier">
+        <p class="tier__label">Tầng phân quyền tập trung — Server EMS UAT (10.33.80.27)</p>
+        <div class="row">
+          <div class="appcard c-authz"><b>CMS admin-service</b><span class="s">:8071 · /admin</span></div>
+          <div class="appcard c-authz"><b>genco_admin</b><span class="s">DB quyền :6432</span></div>
+          <div class="appcard c-authz"><b>Keycloak</b><span class="s">JWT / OIDC</span></div>
+          <div class="appcard c-authz"><b>Redis</b><span class="s">cache gw-authz</span></div>
+        </div>
+      </div>
+
+      <div class="tier" style="margin-top:14px">
+        <p class="tier__label">Tầng nghiệp vụ &amp; dữ liệu</p>
+        <div class="row">
+          <div class="appcard c-ident"><b>Backend EMS/EPS/DRS…</b><span class="s">Server .27 + DB</span></div>
+          <div class="appcard c-biz hl"><b>Backend PMS + tool</b><span class="s">Cụm máy chủ PMS riêng</span></div>
+          <div class="appcard c-db hl"><b>DB PMS</b><span class="s">Postgres pms/sld · MinIO</span></div>
+        </div>
+      </div>
+    </div>
+    <p class="dim" style="font-size:13px;margin-top:8px">Ghi chú: các cổng đều xác thực trên cùng realm Keycloak và tra quyền trên cùng <code>genco_admin</code>; điểm khác biệt duy nhất của PMS là <b>tách backend nghiệp vụ sang cụm máy chủ riêng và đặt một cổng riêng trước nó</b>.</p>
+  </section>
+
+  <!-- 3. PMS DETAIL -->
+  <section id="ct">
+    <div class="kicker">3 · Sơ đồ chi tiết PMS</div>
+    <h2>Luồng đầy đủ — địa chỉ, giao thức, mục đích của từng kết nối</h2>
+    <p class="prose">Trình duyệt duy trì <b>một phiên đăng nhập</b> nhưng nói chuyện với hai cổng. Đường <span style="color:var(--ident)"><b>xanh dương</b></span> = định danh/menu/quyền qua <code>emsgw</code>; đường <span style="color:var(--biz)"><b>xanh lá</b></span> = nghiệp vụ qua <code>pmsgw</code>; đường <span style="color:var(--authz)"><b>vàng đứt nét</b></span> = kiểm tra an ninh về <code>genco_admin</code>/Keycloak (đã cache).</p>
+
+    <div class="diagram">
+      <div class="flow">
+
+        <div class="fnode n-user">
+          <div class="fnode__t">Trình duyệt người dùng <span class="fnode__loc">máy trạm</span></div>
+          <div class="fnode__b">Tải giao diện tĩnh PMS, sau đó gọi song song 2 nhánh ↓</div>
+        </div>
+
+        <!-- identity branch -->
+        <div class="conn conn--ident">
+          <svg viewBox="0 0 20 18"><path d="M10 2 L10 13 M6 9 L10 13 L14 9"/></svg>
+          <span class="conn__addr">HTTPS → https://emsgw-uat.evngenco1.vn/admin/**</span>
+          <span class="conn__cap">Nhánh ĐỊNH DANH (adminClient) — Bearer JWT + X-Checksum</span>
+        </div>
+        <div class="fnode n-ident">
+          <div class="fnode__t">CMS admin-service <span class="fnode__loc">Server .27 · :8071</span></div>
+          <div class="fnode__b">
+            <code>/keycloak/get-token-by-code</code> — đăng nhập &middot; <code>/permission/info-token</code> — user, đơn vị, phòng ban, chức vụ, memberships, capabilities &middot; <code>/resource/sitemap</code> — menu &middot; <code>/resource/sitemapHidden</code> — quyền nút &amp; API
+          </div>
+        </div>
+        <div class="conn conn--authz">
+          <svg viewBox="0 0 20 18"><path d="M10 2 L10 13 M6 9 L10 13 L14 9"/></svg>
+          <span class="conn__addr">JDBC :6432 · OIDC — genco_admin + Keycloak (.27)</span>
+          <span class="conn__cap">admin-service đọc quyền/menu &amp; phát/thẩm token</span>
+        </div>
+        <div class="fnode n-authz">
+          <div class="fnode__t">genco_admin + Keycloak <span class="fnode__loc">Server .27</span></div>
+          <div class="fnode__b">Nguồn sự thật: user · module(app=PMS) · gw_whitelist · group_module/user_module · realm EMS</div>
+        </div>
+
+        <div class="conn" style="--cc:var(--text-dim);opacity:.6"><span class="conn__cap mono" style="font-size:10.5px;letter-spacing:2px">— — —   NHÁNH NGHIỆP VỤ (song song)   — — —</span></div>
+
+        <!-- business branch -->
+        <div class="fnode n-user" style="opacity:.9">
+          <div class="fnode__t">Trình duyệt <span class="fnode__loc">cùng phiên · cùng JWT</span></div>
+        </div>
+        <div class="conn conn--biz">
+          <svg viewBox="0 0 20 18"><path d="M10 2 L10 13 M6 9 L10 13 L14 9"/></svg>
+          <span class="conn__addr">HTTPS → https://pmsgw.evngenco1.vn/**</span>
+          <span class="conn__cap">Nhánh NGHIỆP VỤ (pmsClient) — cùng Bearer JWT + X-Checksum + X-Active-Dept-Id</span>
+        </div>
+
+        <div class="gwrow">
+          <div class="fnode n-biz">
+            <div class="fnode__t">PMS gateway <span class="fnode__loc">Cụm PMS · APP server</span></div>
+            <div class="fnode__b">Cùng app <code>api-gateway</code>, khác config. Qua cửa an ninh → route nội bộ.</div>
+          </div>
+          <div class="sidecall">
+            <div class="sidecall__l"></div>
+            <div class="ctrlbox">
+              <div class="ctrlbox__t">An ninh → .27 (đã cache)</div>
+              <ul>
+                <li>quyền API ← <code>genco_admin</code> <span class="dim">JDBC :6432</span></li>
+                <li>thẩm JWT ← Keycloak <span class="dim">JWKS</span></li>
+              </ul>
+              <span class="cache">Redis gw-authz cache</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="conn conn--biz">
+          <svg viewBox="0 0 20 18"><path d="M10 2 L10 13 M6 9 L10 13 L14 9"/></svg>
+          <span class="conn__addr">HTTP nội bộ → http://&lt;tên-container&gt;:4000 (special-line-service…)</span>
+          <span class="conn__cap">Route bằng tên container — cùng máy chủ, không xuyên host</span>
+        </div>
+        <div class="fnode n-biz">
+          <div class="fnode__t">Backend nghiệp vụ PMS + tool đặc tuyến <span class="fnode__loc">Cụm PMS · APP server</span></div>
+          <div class="fnode__b">Xử lý nghiệp vụ; cần dữ liệu thì gọi xuống DB ↓</div>
+        </div>
+        <div class="conn conn--db">
+          <svg viewBox="0 0 20 18"><path d="M10 2 L10 13 M6 9 L10 13 L14 9"/></svg>
+          <span class="conn__addr">TCP :5432 (Postgres) · :9000 (MinIO) — nội bộ cụm PMS</span>
+          <span class="conn__cap">Truy vấn dữ liệu, đọc/ghi ảnh &amp; tài liệu</span>
+        </div>
+        <div class="fnode n-db">
+          <div class="fnode__t">PostgreSQL (pms · schema sld) + MinIO <span class="fnode__loc">Cụm PMS · DB server</span></div>
+          <div class="fnode__b">Toàn bộ đường dữ liệu nặng nằm trong cụm PMS → nhanh, không dồn qua .27</div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. TABLE -->
+  <section id="bang">
+    <div class="kicker">4 · Bảng kết nối chi tiết</div>
+    <h2>Từng đường dữ liệu: nguồn → đích, địa chỉ, giao thức, mục đích</h2>
+    <div class="table-wrap"><div class="table-scroll">
+    <table>
+      <thead><tr><th>#</th><th>Nguồn</th><th>Đích</th><th>Địa chỉ</th><th>Giao thức</th><th>Mục đích</th></tr></thead>
+      <tbody>
+        <tr><td><span class="dot d-ident"></span>1</td><td>PMS FE (adminClient)</td><td>emsgw → CMS admin-service (.27)</td><td><code>emsgw-uat.evngenco1.vn/admin/keycloak/*</code></td><td>HTTPS</td><td>Đăng nhập / refresh token (OIDC code exchange)</td></tr>
+        <tr><td><span class="dot d-ident"></span>2</td><td>PMS FE (adminClient)</td><td>emsgw → CMS admin-service</td><td><code>/admin/permission/info-token</code></td><td>HTTPS</td><td>Lấy user, <b>đơn vị/phòng ban/chức vụ</b>, memberships, capabilities(PMS)</td></tr>
+        <tr><td><span class="dot d-ident"></span>3</td><td>PMS FE (adminClient)</td><td>emsgw → CMS admin-service</td><td><code>/admin/resource/sitemap</code></td><td>HTTPS</td><td>Lấy <b>menu</b> của app PMS</td></tr>
+        <tr><td><span class="dot d-ident"></span>4</td><td>PMS FE (adminClient)</td><td>emsgw → CMS admin-service</td><td><code>/admin/resource/sitemapHidden</code></td><td>HTTPS</td><td>Lấy <b>quyền nút &amp; API</b> (BTN)</td></tr>
+        <tr><td><span class="dot d-authz"></span>5</td><td>CMS admin-service</td><td>genco_admin (.27)</td><td><code>10.33.80.27:6432/genco_admin</code></td><td>JDBC</td><td>Đọc user/module/quyền để trả về (1)-(4)</td></tr>
+        <tr><td><span class="dot d-authz"></span>6</td><td>FE ↔ CMS admin-service</td><td>Keycloak (.27)</td><td><code>keycloak-uat.evngenco1.vn</code></td><td>OIDC/JWKS</td><td>Xác thực người dùng, phát &amp; thẩm JWT</td></tr>
+        <tr><td><span class="dot d-biz"></span>7</td><td>PMS FE (pmsClient)</td><td><b>PMS gateway</b></td><td><code>pmsgw.evngenco1.vn/**</code></td><td>HTTPS</td><td>Gọi <b>mọi API nghiệp vụ PMS</b> + tool (cùng JWT + X-Active-Dept-Id)</td></tr>
+        <tr><td><span class="dot d-authz"></span>8</td><td>PMS gateway</td><td>genco_admin (.27)</td><td><code>10.33.80.27:6432/genco_admin</code></td><td>JDBC (cache Redis)</td><td>Kiểm tra <b>quyền API</b> (gw_whitelist + module.path)</td></tr>
+        <tr><td><span class="dot d-authz"></span>9</td><td>PMS gateway</td><td>Keycloak (.27)</td><td><code>keycloak-uat.evngenco1.vn/.../certs</code></td><td>JWKS</td><td>Thẩm chữ ký JWT (khóa công khai)</td></tr>
+        <tr><td><span class="dot d-biz"></span>10</td><td>PMS gateway</td><td>Backend PMS / tool</td><td><code>http://&lt;container&gt;:4000</code> (nội bộ)</td><td>HTTP</td><td>Chuyển tiếp request nghiệp vụ (route local)</td></tr>
+        <tr><td><span class="dot d-db"></span>11</td><td>Backend PMS / tool</td><td>DB PMS</td><td><code>IP_DB_PMS:5432</code> · <code>:9000</code></td><td>TCP</td><td>Truy vấn Postgres (pms/sld) · đọc/ghi MinIO</td></tr>
+      </tbody>
+    </table>
+    </div></div>
+    <p class="dim" style="font-size:12.5px;margin-top:8px"><span class="dot d-ident"></span>định danh/menu/quyền &nbsp; <span class="dot d-biz"></span>nghiệp vụ &nbsp; <span class="dot d-authz"></span>kiểm tra an ninh &nbsp; <span class="dot d-db"></span>cơ sở dữ liệu</p>
+  </section>
+
+  <!-- 5. CONDITIONS -->
+  <section id="dk">
+    <div class="kicker">5 · Điều kiện đúng đắn</div>
+    <h2>Bốn ràng buộc để hai cổng hoạt động trên một phiên</h2>
+    <div class="callout callout--warn">
+      <ol>
+        <li><b>Cùng realm Keycloak:</b> JWT phát từ đăng nhập (qua emsgw) phải hợp lệ ở <b>cả hai</b> cổng → <code>pmsgw</code> đặt <code>keycloak.jwks-url</code> trỏ Keycloak (.27).</li>
+        <li><b>Cùng khoá checksum:</b> FE chỉ có một <code>NEXT_PUBLIC_CHECKSUM_SECRET</code> (X-Checksum HMAC) → <code>pmsgw</code> phải dùng đúng khoá đó (hoặc tắt checksum).</li>
+        <li><b>Truyền <code>X-Active-Dept-Id</code> sang pmsgw:</b> để backend nghiệp vụ tái kiểm quyền theo phòng ban đang “acting” (cơ chế đa-phòng-ban).</li>
+        <li><b>Đăng ký module PMS trong genco_admin:</b> app=PMS + menu + API path + BTN + <code>group_module</code>. Thiếu bước này → menu/quyền rỗng và pmsgw chặn hết.</li>
+      </ol>
+    </div>
+    <div class="callout callout--ok">
+      <h3>Hệ quả cần rút gọn khi triển khai FE</h3>
+      <p style="margin:0">Chỉ thêm <b>một</b> base-URL thứ hai: <code>adminClient → NEXT_PUBLIC_API_GATEWAY_URL</code> (emsgw), <code>pmsClient → NEXT_PUBLIC_PMS_GATEWAY_URL</code> (pmsgw). Toàn bộ lớp <code>@evngenco1/{auth-shared, user-client, resource-client}</code> giữ nguyên; đặt <code>NEXT_PUBLIC_APP_CODE=PMS</code>.</p>
+    </div>
+  </section>
+
+  <p class="dim mono" style="font-size:11.5px;margin-top:60px;text-align:center;opacity:.7">Thiết kế dual-gateway PMS · control-plane tập trung (.27) + data-plane cục bộ (cụm PMS) · môi trường UAT · tool số hóa đường đặc tuyến là một module của PMS</p>
+
+</div>
+<script>
+(function(){var t=document.getElementById('themeToggle');var s=localStorage.getItem('theme');
+var init=s||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+if(s)document.documentElement.setAttribute('data-theme',init);
+t.textContent=init==='dark'?'☀':'☾';
+t.addEventListener('click',function(){var c=document.documentElement.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');var n=c==='light'?'dark':'light';document.documentElement.setAttribute('data-theme',n);localStorage.setItem('theme',n);t.textContent=n==='dark'?'☀':'☾';});})();
+</script>
+</body>
+</html>
